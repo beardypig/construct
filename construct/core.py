@@ -2177,22 +2177,33 @@ class Prefixed(Subconstruct):
 
     :param lengthfield: a subcon used for storing the length
     :param subcon: the subcon used for storing the value
+    :param include_length_field: a flag to enable counting the size of the lengthfield as part of the size
 
     Example::
 
         >>> Prefixed(VarInt, GreedyBytes).parse(b"\x05hello????remainins")
         b'hello'
 
-        >>>> Prefixed(VarInt, Byte[:]).parse(b"\x03\x01\x02\x03????following")
+        >>> Prefixed(VarInt, Byte[:]).parse(b"\x03\x01\x02\x03????following")
         [1, 2, 3]
+
+        >>> Prefixed(Byte, GreedyBytes, include_length_field=True).parse(b"\x06hello????remainins")
+        b'hello'
     """
-    __slots__ = ["name", "lengthfield", "subcon"]
-    def __init__(self, lengthfield, subcon):
+    __slots__ = ["name", "lengthfield", "subcon", "include_length_field"]
+    def __init__(self, lengthfield, subcon, include_length_field=False):
         super(Prefixed, self).__init__(subcon)
         self.lengthfield = lengthfield
+        self.include_length_field = include_length_field
     def _parse(self, stream, context, path):
-        length = self.lengthfield._parse(stream, context, path)
-        stream2 = BoundBytesIO(stream, length)
+        try:
+            lengthfield_size = self.lengthfield.sizeof() if self.include_length_field else 0
+            length = self.lengthfield._parse(stream, context, path)
+        except SizeofError:
+            offset_start = stream.tell()
+            length = self.lengthfield._parse(stream, context, path)
+            lengthfield_size = stream.tell() - offset_start if self.include_length_field else 0
+        stream2 = BoundBytesIO(stream, length - lengthfield_size)
         return self.subcon._parse(stream2, context, path)
     def _build(self, obj, stream, context, path):
         try:
@@ -2206,11 +2217,25 @@ class Prefixed(Subconstruct):
             self.subcon._build(obj, stream, context, path)
             offset3 = stream.tell()
             stream.seek(offset1)
-            self.lengthfield._build(offset3-offset2, stream, context, path)
+            lengthfield_size = self.lengthfield._sizeof(context, path) if self.include_length_field else 0
+            self.lengthfield._build(offset3-offset2+lengthfield_size, stream, context, path)
             stream.seek(offset3)
         except SizeofError:
             data = self.subcon.build(obj, context)
-            self.lengthfield._build(len(data), stream, context, path)
+            if self.include_length_field:
+                sl, p_sl = 0, 0
+                dlen = len(data)
+                # do..while
+                i = 0
+                while True:
+                    i += 1
+                    p_sl = sl
+                    sl = len(self.lengthfield.build(dlen + sl))
+                    if p_sl == sl: break
+
+                self.lengthfield._build(dlen + sl, stream, context, path)
+            else:
+                self.lengthfield._build(len(data), stream, context, path)
             _write_stream(stream, len(data), data)
     def _sizeof(self, context, path):
         return self.lengthfield._sizeof(context, path) + self.subcon._sizeof(context, path)

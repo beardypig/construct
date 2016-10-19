@@ -695,6 +695,13 @@ class TestCore(unittest.TestCase):
         assert Prefixed(Byte, Sequence(Peek(Byte), Int16ub, GreedyBytes)).parse(b"\x02\x00\xffgarbage") == [0,255,b'']
         assert raises(Prefixed(VarInt, GreedyBytes).sizeof) == SizeofError
 
+        assert Prefixed(Byte, Int16ul, include_length_field=True).parse(b"\x03\xff\xffgarbage") == 65535
+        assert Prefixed(Byte, Int16ul, include_length_field=True).build(65535) == b"\x03\xff\xff"
+        assert Prefixed(VarInt, GreedyBytes, include_length_field=True).parse(b"\x02\x00\xff\xff") == b'\x00'
+        assert Prefixed(VarInt, GreedyBytes, include_length_field=True).build(b"\x01" * 127) == b"\x81\x01" + b"\x01" * 127
+        assert Prefixed(Byte, GreedyBytes, include_length_field=True).build(b"\x01\x02\x03") == b"\x04\x01\x02\x03"
+        assert Prefixed(Byte, Int16ul, include_length_field=True).sizeof() == 3
+
     def test_compressed_zlib(self):
         zeros = bytes(10000)
         d = Compressed(GreedyBytes, "zlib")
